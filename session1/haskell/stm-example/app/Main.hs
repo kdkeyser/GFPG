@@ -18,6 +18,48 @@ createAccount name value = do
   account <- newTVar value
   return (name, account)
 
+withdraw :: String -> Integer -> Accounts -> STM Bool
+withdraw name amount accounts =
+  case Map.lookup name accounts of
+    Just account -> do
+      currentValue <- readTVar account
+      if currentValue < amount then
+        return False
+      else do
+        writeTVar account $ currentValue - amount
+        return True
+    Nothing -> return False
+
+deposit :: String -> Integer -> Accounts -> STM Bool
+deposit name amount accounts =
+  case Map.lookup name accounts of
+    Just account -> do
+      currentValue <- readTVar account
+      writeTVar account $ currentValue + amount
+      return True
+    Nothing -> return False
+
+data Wire = Wire String String Integer
+
+wire :: Wire -> Accounts -> IO Bool 
+wire (Wire source destination value) accounts = do
+  atomically $ do
+    withdrawSuccess <- withdraw source value accounts
+    if withdrawSuccess then do
+      deposit destination value accounts
+      return True
+    else
+      return False
+
+randomWire :: Accounts -> IO Wire
+randomWire accounts = do
+  value <- randomRIO (1, 100)
+  from <- randomRIO (0,2)
+  to <- randomRIO (0,1)
+  let (fromName,_) = Map.elemAt from accounts
+  let (toName,_) = Map.elemAt to $ Map.deleteAt from accounts
+  return $ Wire fromName toName value
+
 initialAccounts :: STM Accounts
 initialAccounts = do
   mark <- createAccount "Mark" 40000
@@ -33,47 +75,14 @@ printAccounts accounts = do
   putStrLn $ show $ zip names values
   putStrLn $ "Total = " ++ show total
 
-withdraw :: String -> Integer -> Accounts -> STM ()
-withdraw name amount accounts =
-  case Map.lookup name accounts of
-    Just account -> do
-      currentValue <- readTVar account
-      writeTVar account $ currentValue - amount
-    Nothing -> return ()
-
-deposit :: String -> Integer -> Accounts -> STM ()
-deposit name amount accounts =
-  case Map.lookup name accounts of
-    Just account -> do
-      currentValue <- readTVar account
-      writeTVar account $ currentValue + amount
-    Nothing -> return ()
-
-data Wire = Wire String String Integer
-
-randomWire :: Accounts -> IO Wire
-randomWire accounts = do
-  value <- randomRIO (1, 100)
-  from <- randomRIO (0,2)
-  to <- randomRIO (0,1)
-  let (fromName,_) = Map.elemAt from accounts
-  let (toName,_) = Map.elemAt to $ Map.deleteAt from accounts
-  return $ Wire fromName toName value
-
-applyWire :: Wire -> Accounts -> IO () 
-applyWire (Wire source destination value) accounts = do
-  atomically $ do
-    withdraw source value accounts
-    deposit destination value accounts
-
 main :: IO ()
 main = do
   accounts <- atomically initialAccounts
   printAccounts accounts
-  threads <- sequence $ replicate 100 $ do
+  threads <- sequence $ replicate 1000 $ do
     async $ do
-      sequence $ replicate 10000 $ do
-        wire <- randomWire accounts
-        applyWire wire accounts
+      sequence $ replicate 1000 $ do
+        wireInfo <- randomWire accounts
+        wire wireInfo accounts
   sequence $ fmap wait $ threads
   printAccounts accounts 
